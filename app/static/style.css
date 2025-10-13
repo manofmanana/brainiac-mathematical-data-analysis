@@ -1,0 +1,87 @@
+/* ===========================================
+   BRAINIAC THEME — Modern Math + DC Brainiac
+   Glass panels, neon accents, readable on background photo
+   =========================================== */
+
+:root {
+  --bg-ink: rgba(8,10,12,0.55);        /* translucent dark panel */
+  --glass: rgba(255,255,255,0.06);
+  --brainiac-green: #00ff88;
+  --brainiac-cyan: #49f3e1;
+  --brainiac-purple: #8b00ff;
+  --accent: #b7ffdb;
+  --muted: #cfe8e0;
+  --font-main: 'Rajdhani', 'Orbitron', sans-serif;
+}
+
+/* Make the app background visible (photo) but add a subtle vignette */
+html, body, [data-testid="stAppViewContainer"] {
+  background-size: cover !important;
+  color: var(--muted) !important;
+  font-family: var(--font-main) !important;
+}
+
+/* Glass card used throughout the app */
+.glass-card {
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+  border: 1px solid rgba(139,0,255,0.22);
+  box-shadow: 0 8px 30px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.02);
+  border-radius: 14px;
+  padding: 18px;
+}
+
+/* Header card */
+.brainiac-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 18px 24px;
+  margin-bottom: 16px;
+  border-radius: 14px;
+}
+.brainiac-logo {
+  width: 58px; height: 58px; border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, var(--brainiac-cyan), var(--brainiac-green));
+  box-shadow: 0 0 18px rgba(0,255,136,0.18), 0 0 6px rgba(139,0,255,0.08) inset;
+  border: 2px solid rgba(255,255,255,0.06);
+}
+.brainiac-title { color: var(--brainiac-green) !important; font-size: 36px !important; font-weight: 900 !important; text-align: center !important; letter-spacing: 0.6px; }
+.brainiac-sub { color: var(--brainiac-purple) !important; font-size: 14px !important; opacity: 0.98 !important; text-align: center !important; margin-top:4px !important; }
+
+/* Sidebar styling — translucent and compact */
+[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, rgba(6,6,8,0.78), rgba(10,10,12,0.85));
+  border-right: 1px solid rgba(139,0,255,0.12);
+  padding: 12px 10px;
+}
+
+/* Buttons: neon gradient with rounded corners */
+.stButton>button, button {
+  background: linear-gradient(90deg, var(--brainiac-green), var(--brainiac-cyan)) !important;
+  color: #051217 !important; border: none !important; padding: 8px 12px !important; border-radius: 10px !important;
+  font-weight: 700 !important; box-shadow: 0 6px 18px rgba(0,255,136,0.12) !important;
+}
+.stButton>button:hover { transform: translateY(-1px); box-shadow: 0 8px 22px rgba(0,255,136,0.18); }
+
+/* Tabs and charts in glass panels */
+.stTabs, .stPyplot, .stPlotlyChart, .stAltairChart { padding: 8px; }
+.stPyplot > div { background: transparent !important; }
+.stPlotlyChart, .stAltairChart, .stVegaLiteChart, .stPyplot {
+  border-radius: 12px; border: 1px solid rgba(139,0,255,0.10);
+  background: linear-gradient(180deg, rgba(0,0,0,0.36), rgba(255,255,255,0.02));
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+}
+
+/* DataFrames / tables */
+.dataframe { border-radius: 10px; border: 1px solid rgba(0,255,136,0.06); }
+
+/* Small responsive cards */
+.panel { margin-bottom: 18px; }
+
+/* Footer */
+footer, .stMarkdown { color: rgba(200,200,220,0.9); font-size: 0.92em; }
+
+/* Reduce intense default Streamlit colorization */
+.stAlert { border-left: 3px solid var(--brainiac-purple); }
+
