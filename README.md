@@ -96,12 +96,6 @@ streamlit run app/main.py
 - In your statement of purpose (SOP): describe a single experiment (e.g., how initialization + activation affected convergence) and include a short figure (loss curves) exported from the app.
 - Interview talking points: explain the backprop derivation for a Dense layer, show a screenshot of gradient norms over epochs, and briefly summarize what you learned from the experiments.
 
-## Suggested next enhancements (good to mention in your SOP)
-
-- Add short notebooks with step-by-step derivations and visualizations (Jupyter): explain backprop, show 2D loss surfaces and gradient descent paths.
-- Add CI (GitHub Actions) to run tests and optionally render notebooks; this demonstrates reproducibility.
-- Add small unit/integration tests for initializers and training convergence under controlled RNG seeds.
-
 ## File layout
 
 - `app/` — Streamlit application and static CSS/assets.
