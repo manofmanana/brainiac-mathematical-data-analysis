@@ -72,7 +72,7 @@ python -m pytest -q
 4. Run the Streamlit app:
 
 ```bash
-streamlit run app/main.py
+streamlit run main.py
 ```
 
 5. Use the sidebar to pick data, set layer sizes, activation, initialization, learning rate, and epochs. The app exposes training diagnostics and Brainiac Lab visualizations.
@@ -81,6 +81,15 @@ streamlit run app/main.py
 
 - Example experiment script: `python experiments/run_convergence.py` — runs a small synthetic experiment comparing activations (`relu`, `gelu`) and initializations (`he`, `xavier`) and prints final losses.
 - For reproducibility, most functions accept an RNG seed parameter or use fixed seeds in example experiments and tests.
+
+## Notebooks & exported figures
+
+- A lightweight Jupyter notebook with a step-by-step derivation and example experiments is included under `notebooks/` for presentation and teaching. Because interactive notebooks can be fragile across environments, there is also a script that reproduces the notebook figures without requiring notebook execution:
+
+	- `notebooks/generate_figures.py` — runs a small demo and experiment, then saves PNG figures to `notebooks/figures/`.
+	- Generated images (for inclusion in reports/README) live in `notebooks/figures/` and include loss curves, gradient heatmaps, and convergence comparison plots.
+
+Use the script when you want reproducible images without running the full interactive notebook workflow.
 
 ## Testing & verification
 
