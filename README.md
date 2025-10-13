@@ -99,11 +99,6 @@ Use the script when you want reproducible images without running the full intera
 	- A simple training sanity test verifies loss decreases on a small linear problem.
 - Run the tests with `python -m pytest -q`.
 
-## Presentation tips for grad-school applications
-
-- In your CV: include a 2–3 line summary and a link to the repo. Mention the math topics (backprop derivations, SVD art, Hessian trace diagnostics).
-- In your statement of purpose (SOP): describe a single experiment (e.g., how initialization + activation affected convergence) and include a short figure (loss curves) exported from the app.
-- Interview talking points: explain the backprop derivation for a Dense layer, show a screenshot of gradient norms over epochs, and briefly summarize what you learned from the experiments.
 
 ## File layout
 
