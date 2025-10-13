@@ -4,6 +4,8 @@ Brainiac is an educational, math-first implementation of a feed-forward neural n
 
 This README explains the project's goals, the math it showcases, how the code is organized, how to run and reproduce experiments, and suggestions for how to present this work in an MS application.
 
+Live deployment can be found here: https://brainiac-mathematical.streamlit.app/
+
 ## High-level goals
 
 - Provide a minimal, readable implementation of a neural network from first principles (no deep learning frameworks) so reviewers can inspect the math and code directly.
@@ -11,7 +13,7 @@ This README explains the project's goals, the math it showcases, how the code is
 - Supply visual diagnostics (loss curves, gradient norms, 3D loss slices) that make model behavior interpretable and teachable.
 - Include small reproducible experiments and tests to demonstrate scientific thinking and engineering rigor.
 
-## Mathematical foundations (what to highlight in an application)
+## Mathematical foundations 
 
 1) Multivariable calculus and backpropagation
 
@@ -113,12 +115,4 @@ streamlit run app/main.py
 This repository is a personal portfolio project. If you use or adapt the code, please include a note in your application or CV. If you'd like help tailoring a one-page summary or a short video demo for your application, contact: your-email@example.com
 
 ---
-
-If you want, I can now:
-
-- Generate a short Jupyter notebook that walks through the math and reproduces one experiment (I can add the notebook under `notebooks/`).
-- Add a GitHub Actions CI workflow to run tests automatically on PRs.
-- Export a few annotated plots (loss curves, gradient norms) and add them to the README for immediate visual impact.
-
-Which of these would you like next?
 
