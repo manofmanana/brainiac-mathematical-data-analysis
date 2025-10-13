@@ -11,7 +11,7 @@ from pathlib import Path
 import base64
 import warnings
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -62,20 +62,102 @@ def load_css():
 
 
 def set_background_image(image_path: str):
-    p = Path(image_path)
-    if not p.exists():
-        return
-    try:
-        data = p.read_bytes()
-        b64 = base64.b64encode(data).decode()
-        mime = "image/jpeg" if p.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
-        st.markdown(
-            f"<style>html, body, [data-testid=\"stAppViewContainer\"] {{ background: url(data:{mime};base64,{b64}) center/cover no-repeat; background-attachment: fixed; }}</style>",
-            unsafe_allow_html=True,
-        )
-    except Exception:
-        # don't crash the app for background failures
-        pass
+        p = Path(image_path)
+        if not p.exists():
+                return
+
+        try:
+                data = p.read_bytes()
+                b64 = base64.b64encode(data).decode()
+                mime = "image/jpeg" if p.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
+
+                css = f"""
+                <style>
+                /* Apply the background to the page itself */
+                html, body {{
+                    background-image: url(data:{mime};base64,{b64}) !important;
+                    background-position: center !important;
+                    background-repeat: no-repeat !important;
+                    background-size: cover !important;
+                    background-attachment: fixed !important;
+                }}
+
+                        /* Make Streamlit containers transparent so the page background shows through */
+                        .stApp, .stApp > .main, .stApp .main > div, .block-container, .css-1lcbmhc, .css-18e3th9 {{
+                            background-color: transparent !important;
+                            background-image: none !important;
+                        }}
+
+                        /* Also apply the background directly to common Streamlit app container selectors (high-specificity) */
+                        [data-testid="stAppViewContainer"], [data-testid="stAppViewContainer"] > div, [data-testid="stAppViewContainer"] > div > div {{
+                            background-image: url(data:{mime};base64,{b64}) !important;
+                            background-position: center !important;
+                            background-repeat: no-repeat !important;
+                            background-size: cover !important;
+                            background-attachment: fixed !important;
+                            z-index: 0 !important;
+                        }}
+
+                        /* Ensure immediate children stack above the background */
+                        [data-testid="stAppViewContainer"] * {{
+                            position: relative !important;
+                            z-index: 1 !important;
+                        }}
+
+                /* Ensure top-level sections don't cover the background */
+                [data-testid="stAppViewContainer"], section[data-testid="stAppViewContainer"] {{
+                    background-color: transparent !important;
+                }}
+
+                /* Ensure top-level sections don't cover the background */
+                [data-testid="stAppViewContainer"], section[data-testid="stAppViewContainer"] {{
+                    background-color: transparent !important;
+                }}
+
+                /* Fallback overlay using body::before to ensure the image shows behind all Streamlit containers */
+                body::before {{
+                    content: "";
+                    position: fixed;
+                    inset: 0;
+                    z-index: -9999;
+                    background-image: url(data:{mime};base64,{b64});
+                    background-position: center;
+                    background-size: cover;
+                    background-repeat: no-repeat;
+                    background-attachment: fixed;
+                    opacity: 0.95;
+                    pointer-events: none;
+                }}
+
+                </style>
+                """
+
+                st.markdown(css, unsafe_allow_html=True)
+                # Visible feedback in the sidebar to help confirm background was applied
+                try:
+                    st.session_state['background_applied'] = str(p)
+                    st.sidebar.success(f"Background applied: {p.name}")
+                except Exception:
+                    # If Streamlit state isn't available at call time, ignore
+                    pass
+                # Write a small marker file so we can detect from the running environment which image was used
+                try:
+                    marker = ROOT / '.bg_applied'
+                    marker.write_text(f"{p}\n")
+                except Exception:
+                    pass
+                # Also inject a full-screen fixed div behind app content as a last-resort fallback
+                try:
+                    div_html = f"""
+                    <div id="brainiac-bg" style="position:fixed;inset:0;z-index:-1;pointer-events:none;background-image:url(data:{mime};base64,{b64});background-position:center;background-size:cover;background-repeat:no-repeat;background-attachment:fixed;opacity:1;"></div>
+                    """
+                    st.markdown(div_html, unsafe_allow_html=True)
+                except Exception:
+                    pass
+        except Exception:
+            # Don't crash the app for background failures; we deliberately swallow exceptions
+            # because background is optional.
+            return
 
 
 def ensure_input_dim(layers_list, Xarr):
@@ -110,10 +192,18 @@ def brainiac_lab_art():
 def main():
     load_css()
 
-    # Prefer the explicit workspace background image if it exists
-    preferred_bg = "/Users/alejandroines/mathematical-mind/space.jpg"
-    if Path(preferred_bg).exists():
-        set_background_image(preferred_bg)
+    # Prefer the explicit workspace background image if it exists.
+    # Check a few common locations (repo root, assets/ folder, absolute path from earlier runs).
+    candidates = [
+        ROOT / "space.jpg",
+        ROOT / "assets" / "space.jpg",
+        Path("/Users/alejandroines/mathematical-mind/space.jpg"),
+        Path("/Users/alejandroines/mathematical-mind/assets/space.jpg"),
+    ]
+    for c in candidates:
+        if c.exists():
+            set_background_image(str(c))
+            break
 
     # Header (centered, neon styling handled via CSS)
     logo = ROOT / "app" / "static" / "logo.png"
@@ -146,7 +236,11 @@ def main():
 
     bg_choice = st.sidebar.selectbox("Background", ["Grey", "Workspace space.jpg", "None"], index=0)
     if bg_choice == "Workspace space.jpg":
-        set_background_image(str(ROOT / "space.jpg"))
+        # Try the same candidate resolution performed at startup
+        for c in [ROOT / "space.jpg", ROOT / "assets" / "space.jpg", Path("/Users/alejandroines/mathematical-mind/space.jpg")]:
+            if c.exists():
+                set_background_image(str(c))
+                break
     elif bg_choice == "None":
         st.markdown("<style>body { background-color: #ffffff; }</style>", unsafe_allow_html=True)
 
