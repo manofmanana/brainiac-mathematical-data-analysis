@@ -1,6 +1,6 @@
 # Brainiac — Mathematical Neural Network
 
-Brainiac is an educational, math-first implementation of a feed-forward neural network. It was designed as a portfolio piece to demonstrate both theoretical understanding (multivariable calculus, linear algebra, probability/statistics) and practical engineering (numerical stability, testing, reproducible experiments). The project pairs a compact NumPy implementation of network components with an interactive Streamlit dashboard for visualization and experimentation.
+Brainiac is an educational, math-first implementation of a feed-forward neural network. It was designed as a portfolio piece to demonstrate both theoretical understanding (multivariate calculus, linear algebra, probability/statistics) and practical engineering (numerical stability, testing, reproducible experiments). The project pairs a compact NumPy implementation of network components with an interactive Streamlit dashboard for visualization and experimentation.
 
 This README explains the project's goals, the math it showcases, how the code is organized, how to run and reproduce experiments, and suggestions for how to present this work in an MS application.
 
