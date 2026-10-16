@@ -1,386 +1,374 @@
-"""app/main.py
-Clean, consolidated Streamlit entrypoint for Brainiac.
+"""Brainiac: an interactive lab for a neural network built from first principles.
 
-This version keeps a Brainiac aesthetic but avoids duplicated imports and
-imports heavy modules lazily inside UI callbacks to reduce startup issues.
+Run with:  streamlit run main.py
 """
 
-import os
-import sys
-from pathlib import Path
+from __future__ import annotations
+
 import base64
-import warnings
-
-ROOT = Path(__file__).resolve().parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-# Try to silence noisy urllib3 / LibreSSL warnings (non-fatal);
-# keep this before importing heavy network/data libraries where possible.
-warnings.filterwarnings("ignore", message=r".*LibreSSL.*")
-warnings.filterwarnings("ignore", message=r".*urllib3 v2 only supports OpenSSL.*")
+import time
+from pathlib import Path
 
 import numpy as np
-import matplotlib.pyplot as plt
+import pandas as pd
 import streamlit as st
 
-# Page config must run early
-st.set_page_config(page_title="Brainiac: a mathematical neural network", layout="wide")
+from app import charts
+from brainiac import ACTIVATIONS, DATASETS, INIT_SCHEMES, NeuralNetwork, load_dataset
+from brainiac.curvature import hutchinson_trace, top_eigenvalue
+from brainiac.experiments import compare_configs
+from brainiac.gradcheck import gradient_check
+from brainiac.initializers import target_std
+from brainiac.landscape import interpolation_path, loss_surface
+from brainiac.linalg_lab import fft_filter, load_grayscale, pca, svd_compress
+from brainiac.network import History
+
+ROOT = Path(__file__).resolve().parent
+ASSETS = ROOT / "assets"
+
+st.set_page_config(page_title="Brainiac · neural network from first principles", page_icon="🧠", layout="wide")
 
 
-def load_css():
-    css_path = ROOT / "app" / "static" / "style.css"
-    if css_path.exists():
-        try:
-            st.markdown(f"<style>{css_path.read_text()}</style>", unsafe_allow_html=True)
-            return
-        except Exception:
-            pass
-    # Minimal fallback styling
+# ---------------------------------------------------------------- styling
+@st.cache_resource
+def _css() -> str:
+    css = (ROOT / "app" / "static" / "style.css").read_text(encoding="utf-8")
+    bg = ASSETS / "space.webp"
+    if bg.exists():
+        b64 = base64.b64encode(bg.read_bytes()).decode()
+        css += (
+            '\n[data-testid="stApp"] { background: linear-gradient(rgba(6,8,12,0.82), rgba(6,8,12,0.9)), '
+            f'url("data:image/webp;base64,{b64}") center / cover fixed; }}'
+        )
+    return f"<style>{css}</style>"
+
+
+st.markdown(_css(), unsafe_allow_html=True)
+
+
+# --------------------------------------------------------------- training
+@st.cache_data(show_spinner=False, max_entries=64)
+def train(
+    dataset: str,
+    noise: float,
+    hidden: tuple[int, ...],
+    activation: str,
+    init: str,
+    optimizer: str,
+    lr: float,
+    batch_size: int | None,
+    epochs: int,
+    seed: int,
+):
+    """Train once per configuration; cached so every tab reuses the same model."""
+    data = load_dataset(dataset, noise=noise, seed=seed)
+    net = NeuralNetwork([data.n_features, *hidden, data.n_outputs], activation, init, data.task, seed=seed)
+    theta0 = net.get_flat_params().copy()
+    t = time.perf_counter()
+    with np.errstate(over="ignore", invalid="ignore"):
+        hist = net.fit(data.X_train, data.Y_train, epochs=epochs, lr=lr, optimizer=optimizer, batch_size=batch_size)
+    return theta0, net.get_flat_params(), hist, time.perf_counter() - t
+
+
+def rebuild(cfg: dict, theta: np.ndarray):
+    data = load_dataset(cfg["dataset"], noise=cfg["noise"], seed=cfg["seed"])
+    net = NeuralNetwork(
+        [data.n_features, *cfg["hidden"], data.n_outputs], cfg["activation"], cfg["init"], data.task, seed=cfg["seed"]
+    )
+    net.set_flat_params(theta)
+    return data, net
+
+
+# ---------------------------------------------------------------- sidebar
+with st.sidebar:
+    st.markdown("## ⚙️ Experiment controls")
+    dataset = st.selectbox("Dataset", list(DATASETS), help="All datasets are generated locally and seeded.")
+    default_noise = 0.1 if dataset.startswith("Noisy") else (0.0 if dataset.startswith("Iris") else 0.15)
+    noise = st.slider("Noise", 0.0, 0.5, default_noise, 0.01)
+    hidden_txt = st.text_input("Hidden layers (comma-separated widths)", "16, 16")
+    try:
+        hidden = tuple(int(h) for h in hidden_txt.replace(" ", "").split(",") if h)
+        if not hidden or min(hidden) < 1 or max(hidden) > 256 or len(hidden) > 6:
+            raise ValueError
+    except ValueError:
+        st.error("Use 1–6 positive widths up to 256, e.g. `16, 16`.")
+        hidden = (16, 16)
+    c1, c2 = st.columns(2)
+    activation = c1.selectbox("Activation", list(ACTIVATIONS)[:-1], index=3)
+    init = c2.selectbox("Initialisation", INIT_SCHEMES, index=1)
+    c3, c4 = st.columns(2)
+    optimizer = c3.selectbox("Optimiser", ["adam", "momentum", "sgd"])
+    lr = c4.select_slider("Learning rate", [0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0], value=0.01)
+    c5, c6 = st.columns(2)
+    batch_label = c5.selectbox("Batch size", ["16", "32", "64", "full batch"], index=1)
+    batch_size = None if batch_label == "full batch" else int(batch_label)
+    seed = int(c6.number_input("Seed", 0, 9999, 0))
+    epochs = st.slider("Epochs", 10, 600, 200, 10)
+
+cfg = dict(
+    dataset=dataset,
+    noise=noise,
+    hidden=hidden,
+    activation=activation,
+    init=init,
+    optimizer=optimizer,
+    lr=lr,
+    batch_size=batch_size,
+    epochs=epochs,
+    seed=seed,
+)
+with st.spinner("Training…"):
+    theta0, theta, hist, train_time = train(**cfg)
+data, net = rebuild(cfg, theta)
+hist: History
+diverged = not np.isfinite(hist.loss[-1])
+
+# ----------------------------------------------------------------- header
+st.markdown(
+    "<div class='brainiac-header'><h1><span class='title'>Brainiac</span></h1>"
+    "<p>A neural network built from first principles in NumPy: every derivative written by hand and checked numerically.</p></div>",
+    unsafe_allow_html=True,
+)
+
+tab_train, tab_check, tab_land, tab_exp, tab_lab, tab_math = st.tabs(
+    [
+        "🧠 Train & diagnose",
+        "✅ Gradient check",
+        "⛰️ Loss landscape",
+        "⚖️ Experiments",
+        "🧪 Linear algebra lab",
+        "📐 The math",
+    ]
+)
+
+# ------------------------------------------------------------ train tab
+with tab_train:
+    if diverged:
+        st.error(
+            f"Training diverged after {len(hist.loss)} epochs (the loss became infinite). "
+            "Lower the learning rate, or switch to Adam."
+        )
+    m = st.columns(5)
+    m[0].metric(
+        "Training loss",
+        f"{hist.loss[-1]:.4f}",
+        delta=f"{hist.loss[-1] - hist.loss[0]:+.3f} since epoch 1",
+        delta_color="inverse",
+    )
+    if data.task == "classification":
+        m[1].metric("Train accuracy", f"{net.accuracy(data.X_train, data.Y_train):.1%}")
+        m[2].metric("Test accuracy", f"{net.accuracy(data.X_test, data.Y_test):.1%}")
+    else:
+        m[1].metric("Train MSE", f"{net.loss(data.X_train, data.Y_train):.4f}")
+        m[2].metric("Test MSE", f"{net.loss(data.X_test, data.Y_test):.4f}")
+    m[3].metric("Parameters", f"{net.n_params:,}")
+    m[4].metric("Training time", f"{train_time * 1000:.0f} ms")
+
+    left, right = st.columns([1.1, 1])
+    with left:
+        if data.task == "regression":
+            st.plotly_chart(charts.regression_fit(net, data), width="stretch")
+        elif data.n_features == 2:
+            st.plotly_chart(charts.decision_boundary(net, data), width="stretch")
+        else:
+            st.plotly_chart(charts.confusion_matrix(net, data), width="stretch")
+    with right:
+        st.plotly_chart(charts.training_curves(hist, data.task), width="stretch")
+
+    left, right = st.columns(2)
+    with left:
+        st.plotly_chart(charts.grad_norms(hist), width="stretch")
+        st.caption(
+            "Gradients shrinking toward the first layer signal **vanishing gradients**: try sigmoid with "
+            "`8, 8, 8, 8` hidden layers and *normal* initialisation, then switch to ReLU + He."
+        )
+    with right:
+        init_std = [
+            target_std(init, a, b) for a, b in zip([data.n_features, *hidden], [*hidden, data.n_outputs], strict=True)
+        ]
+        st.plotly_chart(charts.weight_histograms(net, init_std), width="stretch")
+        st.caption(f"{init} initialisation draws each layer's weights with the σ shown in the legend.")
+
+# ------------------------------------------------------------ gradcheck
+with tab_check:
     st.markdown(
-        """
-        <style>
-        :root {
-          --brainiac-green: #49f3e1;
-          --brainiac-purple: #8b00ff;
-          --brainiac-text: #b7ffdb;
-          --brainiac-bg: #0b0d10;
-        }
-        body, .stApp, .block-container { background-color: var(--brainiac-bg) !important; color: var(--brainiac-text) !important }
-        .brainiac-header { font-weight: 800; font-family: 'Orbitron', sans-serif; text-align: center; color: var(--brainiac-green) !important; font-size:36px }
-        .brainiac-sub { text-align:center; color: var(--brainiac-purple) !important; margin-top:4px }
-        .glass-card { background: rgba(255,255,255,0.02); padding:12px; border-radius:8px }
-        /* Tabs and general UI accents */
-        [role="tab"] { color: var(--brainiac-text) !important }
-        .stButton>button { background: linear-gradient(90deg, rgba(73,243,225,0.08), rgba(139,0,255,0.06)); color: var(--brainiac-text) !important }
-        .stSidebar { background: rgba(11,13,16,0.95) }
-        a { color: var(--brainiac-green) }
-        </style>
-        """,
-        unsafe_allow_html=True,
+        "Backpropagation computes the exact gradient with the chain rule. To be sure it's implemented correctly, "
+        "we compare it with a **central finite difference** for each parameter:"
+    )
+    st.latex(
+        r"\frac{\partial L}{\partial \theta_i} \approx \frac{L(\theta + \varepsilon e_i) - L(\theta - \varepsilon e_i)}{2\varepsilon}, \qquad \varepsilon = 10^{-6}"
+    )
+    n_check = min(64, data.X_train.shape[1])
+    result = gradient_check(net, data.X_train[:, :n_check], data.Y_train[:, :n_check])
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Relative error", f"{result.overall:.1e}")
+    c2.metric("Parameters compared", f"{result.checked.size:,} / {net.n_params:,}")
+    c3.metric(
+        "Verdict",
+        "✅ Correct" if result.passed else "❌ Mismatch",
+        help="Passes when the relative error is below 1e-5.",
+    )
+    left, right = st.columns([1.3, 1])
+    with left:
+        st.plotly_chart(
+            charts.gradcheck_scatter(result.analytic[result.checked], result.numeric[result.checked]), width="stretch"
+        )
+    with right:
+        st.markdown("**Relative error per parameter tensor**")
+        st.dataframe(
+            pd.DataFrame(result.per_layer, columns=["tensor", "relative error"]).style.format(
+                {"relative error": "{:.2e}"}
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+        st.caption("Below about 1e-7 is perfect agreement; the remaining error is floating-point rounding.")
+
+# ------------------------------------------------------------ landscape
+with tab_land:
+    if diverged:
+        st.info("Train a model that converges to explore its loss landscape.")
+    else:
+        c1, c2 = st.columns([1, 3])
+        span = c1.slider("Slice width", 0.2, 2.0, 1.0, 0.1, help="Distance along each filter-normalised direction")
+        res = c1.slider("Resolution", 11, 41, 25, 2)
+        surf = loss_surface(net, data.X_train, data.Y_train, span=span, resolution=res, seed=seed)
+        with c2:
+            st.plotly_chart(charts.surface_3d(surf.alphas, surf.betas, surf.loss), width="stretch")
+        st.caption(
+            "A 2-D slice L(θ* + αδ + βη) along two random, filter-normalised directions (Li et al., 2018). "
+            "Wide, flat basins tend to generalise better than sharp ones."
+        )
+
+        left, right = st.columns(2)
+        with left:
+            ts, losses = interpolation_path(net, theta0, data.X_train, data.Y_train)
+            st.plotly_chart(charts.interpolation(ts, losses), width="stretch")
+        with right:
+            st.markdown("#### Curvature at the solution")
+            grad_fn = lambda th: net.flat_grad(th, data.X_train, data.Y_train)  # noqa: E731
+            lam = top_eigenvalue(grad_fn, theta, seed=seed)
+            tr = hutchinson_trace(grad_fn, theta, n_samples=30, seed=seed)
+            k1, k2 = st.columns(2)
+            k1.metric("Top Hessian eigenvalue λₘₐₓ", f"{lam:.3f}")
+            k2.metric("Hessian trace (Hutchinson)", f"{tr.mean:.2f} ± {tr.stderr:.2f}")
+            st.markdown(
+                "Both use **Hessian-vector products** "
+                r"$Hv \approx \frac{\nabla L(\theta+\varepsilon v) - \nabla L(\theta-\varepsilon v)}{2\varepsilon}$, "
+                "so the Hessian is never built. Power iteration gives λₘₐₓ; Hutchinson's estimator "
+                r"$\mathbb{E}[v^\top H v] = \operatorname{tr}(H)$ gives the trace."
+            )
+            if lam > 0:
+                bound = 2 / lam
+                verdict = "within" if lr < bound else "**above**"
+                st.markdown(
+                    f"Plain gradient descent is stable only when η < 2/λₘₐₓ = **{bound:.3f}**. "
+                    f"Your learning rate η = {lr} is {verdict} that bound."
+                )
+
+# ------------------------------------------------------------ experiments
+with tab_exp:
+    st.markdown(
+        "Compare activation × initialisation choices on the current dataset and architecture. Each configuration "
+        "trains on several seeds, so you see the **mean and spread** rather than one lucky run."
+    )
+    with st.form("experiment"):
+        c1, c2 = st.columns(2)
+        acts = c1.multiselect("Activations", list(ACTIVATIONS)[:-1], default=["relu", "tanh", "sigmoid"])
+        inits = c2.multiselect("Initialisations", INIT_SCHEMES, default=["he", "xavier"])
+        c3, c4 = st.columns(2)
+        n_seeds = c3.slider("Seeds per configuration", 1, 5, 3)
+        exp_epochs = c4.slider("Epochs", 20, 300, 120, 10)
+        run = st.form_submit_button("▶ Run experiment", type="primary")
+    if run:
+        if not acts or not inits:
+            st.warning("Pick at least one activation and one initialisation.")
+        else:
+            with st.spinner(f"Training {len(acts) * len(inits) * n_seeds} networks…"):
+                target = 0.1 if data.task == "classification" else 0.05
+                runs = compare_configs(
+                    data,
+                    list(hidden),
+                    acts,
+                    inits,
+                    list(range(n_seeds)),
+                    epochs=exp_epochs,
+                    lr=lr,
+                    optimizer=optimizer,
+                    batch_size=batch_size,
+                    target=target,
+                )
+            st.plotly_chart(charts.experiment_curves(runs), width="stretch")
+            metric = "test accuracy" if data.task == "classification" else "test MSE"
+            fmt = "{:.1%}" if data.task == "classification" else "{:.4f}"
+            rows = []
+            for r in runs:
+                rows.append(
+                    {
+                        "configuration": r.label,
+                        "final loss": f"{np.mean(r.final_loss):.4f} ± {np.std(r.final_loss):.4f}",
+                        metric: f"{fmt.format(np.mean(r.test_metric))} ± {fmt.format(np.std(r.test_metric))}",
+                        f"epochs to loss < {target}": (
+                            f"{np.nanmean(r.epochs_to_target):.0f}"
+                            if np.isfinite(r.epochs_to_target).any()
+                            else "never"
+                        ),
+                        "_sort": np.mean(r.final_loss),
+                    }
+                )
+            table = pd.DataFrame(rows).sort_values("_sort").drop(columns="_sort")
+            st.dataframe(table, hide_index=True, width="stretch")
+            st.caption("Values are mean ± standard deviation across seeds. Sorted by final training loss.")
+
+# ------------------------------------------------------------ linalg lab
+with tab_lab:
+    st.markdown("#### SVD image compression")
+    img = load_grayscale(ASSETS / "space.webp")
+    k = st.slider("Rank k (number of singular values kept)", 1, 120, 20)
+    comp = svd_compress(img, k)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Energy kept", f"{comp.energy:.1%}")
+    c2.metric("Relative error", f"{comp.relative_error:.1%}")
+    c3.metric("Compression", f"{comp.compression_ratio:.1f}×")
+    a, b, c = st.columns(3)
+    a.plotly_chart(charts.image(img, f"Original ({img.shape[0]}×{img.shape[1]})"), width="stretch")
+    b.plotly_chart(charts.image(comp.reconstruction, f"Rank-{k} reconstruction"), width="stretch")
+    c.plotly_chart(charts.singular_values(comp.singular_values, k), width="stretch")
+    st.caption(
+        "By the Eckart–Young theorem, keeping the top k singular triplets is the best possible rank-k approximation."
     )
 
-
-def set_background_image(image_path: str):
-        p = Path(image_path)
-        if not p.exists():
-                return
-
-        try:
-                data = p.read_bytes()
-                b64 = base64.b64encode(data).decode()
-                mime = "image/jpeg" if p.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
-
-                css = f"""
-                <style>
-                /* Apply the background to the page itself */
-                html, body {{
-                    background-image: url(data:{mime};base64,{b64}) !important;
-                    background-position: center !important;
-                    background-repeat: no-repeat !important;
-                    background-size: cover !important;
-                    background-attachment: fixed !important;
-                }}
-
-                        /* Make Streamlit containers transparent so the page background shows through */
-                        .stApp, .stApp > .main, .stApp .main > div, .block-container, .css-1lcbmhc, .css-18e3th9 {{
-                            background-color: transparent !important;
-                            background-image: none !important;
-                        }}
-
-                        /* Also apply the background directly to common Streamlit app container selectors (high-specificity) */
-                        [data-testid="stAppViewContainer"], [data-testid="stAppViewContainer"] > div, [data-testid="stAppViewContainer"] > div > div {{
-                            background-image: url(data:{mime};base64,{b64}) !important;
-                            background-position: center !important;
-                            background-repeat: no-repeat !important;
-                            background-size: cover !important;
-                            background-attachment: fixed !important;
-                            z-index: 0 !important;
-                        }}
-
-                        /* Ensure immediate children stack above the background */
-                        [data-testid="stAppViewContainer"] * {{
-                            position: relative !important;
-                            z-index: 1 !important;
-                        }}
-
-                /* Ensure top-level sections don't cover the background */
-                [data-testid="stAppViewContainer"], section[data-testid="stAppViewContainer"] {{
-                    background-color: transparent !important;
-                }}
-
-                /* Ensure top-level sections don't cover the background */
-                [data-testid="stAppViewContainer"], section[data-testid="stAppViewContainer"] {{
-                    background-color: transparent !important;
-                }}
-
-                /* Fallback overlay using body::before to ensure the image shows behind all Streamlit containers */
-                body::before {{
-                    content: "";
-                    position: fixed;
-                    inset: 0;
-                    z-index: -9999;
-                    background-image: url(data:{mime};base64,{b64});
-                    background-position: center;
-                    background-size: cover;
-                    background-repeat: no-repeat;
-                    background-attachment: fixed;
-                    opacity: 0.95;
-                    pointer-events: none;
-                }}
-
-                </style>
-                """
-
-                st.markdown(css, unsafe_allow_html=True)
-                # Visible feedback in the sidebar to help confirm background was applied
-                try:
-                    st.session_state['background_applied'] = str(p)
-                    st.sidebar.success(f"Background applied: {p.name}")
-                except Exception:
-                    # If Streamlit state isn't available at call time, ignore
-                    pass
-                # Write a small marker file so we can detect from the running environment which image was used
-                try:
-                    marker = ROOT / '.bg_applied'
-                    marker.write_text(f"{p}\n")
-                except Exception:
-                    pass
-                # Also inject a full-screen fixed div behind app content as a last-resort fallback
-                try:
-                    div_html = f"""
-                    <div id="brainiac-bg" style="position:fixed;inset:0;z-index:-1;pointer-events:none;background-image:url(data:{mime};base64,{b64});background-position:center;background-size:cover;background-repeat:no-repeat;background-attachment:fixed;opacity:1;"></div>
-                    """
-                    st.markdown(div_html, unsafe_allow_html=True)
-                except Exception:
-                    pass
-        except Exception:
-            # Don't crash the app for background failures; we deliberately swallow exceptions
-            # because background is optional.
-            return
-
-
-def ensure_input_dim(layers_list, Xarr):
-    input_dim = Xarr.shape[0]
-    if int(layers_list[0]) != int(input_dim):
-        st.sidebar.warning(f"Adjusting input layer from {layers_list[0]} to match data ({input_dim})")
-        layers_list[0] = int(input_dim)
-    return layers_list
-
-
-def brainiac_lab_art():
-    # Create SVD/PCA/FFT based art and return a matplotlib Figure
-    A = np.random.randn(128, 128)
-    U, S, Vt = np.linalg.svd(A, full_matrices=False)
-    img_svd = (U @ np.diag(S) @ Vt)
-    fig, ax = plt.subplots(1, 3, figsize=(12, 4))
-    # Use np.ptp for NumPy 2.0 compatibility
-    ax[0].imshow((img_svd - img_svd.min()) / np.ptp(img_svd), cmap="plasma")
-    ax[0].set_title("SVD Image")
-    comps = U[:, :3] @ np.diag(S[:3])
-    ax[1].imshow((comps - comps.min()) / np.ptp(comps), cmap="magma")
-    ax[1].set_title("PCA-ish")
-    F = np.fft.fftshift(np.fft.fft2(A))
-    ax[2].imshow(np.log1p(np.abs(F)), cmap="inferno")
-    ax[2].set_title("FFT Spectrogram")
-    for a in ax:
-        a.axis("off")
-    plt.tight_layout()
-    return fig
-
-
-def main():
-    load_css()
-
-    # Prefer the explicit workspace background image if it exists.
-    # Check a few common locations (repo root, assets/ folder, absolute path from earlier runs).
-    candidates = [
-        ROOT / "space.jpg",
-        ROOT / "assets" / "space.jpg",
-        Path("/Users/alejandroines/mathematical-mind/space.jpg"),
-        Path("/Users/alejandroines/mathematical-mind/assets/space.jpg"),
-    ]
-    for c in candidates:
-        if c.exists():
-            set_background_image(str(c))
-            break
-
-    # Header (centered, neon styling handled via CSS)
-    logo = ROOT / "app" / "static" / "logo.png"
-    header_html = ""
-    if logo.exists():
-        # Inline styles here to force color/centering over Streamlit defaults
-        header_html = f"""
-        <div style='display:flex;align-items:center;justify-content:center;gap:20px;'>
-            <h1 class='brainiac-header' style='color:#00FF88 !important; text-align:center !important; font-size:40px !important; font-weight:900 !important; font-style:italic !important; font-family: Georgia, "Times New Roman", serif !important; margin:0;'>Brainiac: Mathematical Neural Network</h1>
-            <img src='data:image/png;base64,{base64.b64encode(logo.read_bytes()).decode()}' style='width:72px;height:auto;border-radius:8px;opacity:0.95'>
-        </div>
-        """
+    st.markdown("#### Principal component analysis of the current dataset")
+    p = pca(np.hstack([data.X_train, data.X_test]))
+    if data.task == "classification":
+        labels = np.r_[data.labels_train, data.labels_test]
+        names = data.class_names
     else:
-        header_html = """
-        <div style='text-align:center;'>
-            <h1 class='brainiac-header' style='color:#00FF88 !important; text-align:center !important; font-size:40px !important; font-weight:900 !important; font-style:italic !important; font-family: Georgia, "Times New Roman", serif !important; margin:0;'>Brainiac: Mathematical Neural Network</h1>
-        </div>
-        """
-    st.markdown(header_html, unsafe_allow_html=True)
+        labels, names = np.zeros(data.X_train.shape[1] + data.X_test.shape[1], int), ["samples"]
+    left, right = st.columns(2)
+    left.plotly_chart(charts.scree(p.explained_ratio), width="stretch")
+    if p.eigenvalues.size >= 2:
+        right.plotly_chart(charts.pca_scatter(p.projection, labels, names), width="stretch")
+    else:
+        right.info("PCA needs at least two features; pick Iris for the most interesting projection.")
 
-    # Sidebar controls
-    st.sidebar.header("Experiment Controls")
-    data_source = st.sidebar.radio("Data Source", ["Iris Dataset", "CoinGecko: Bitcoin"], index=0)
-    layers_input = st.sidebar.text_input("Layer sizes (comma-separated)", "4,8,4,1")
-    activation = st.sidebar.selectbox("Activation", ["relu", "sigmoid", "gelu"], index=0)
-    init_scheme = st.sidebar.selectbox("Init Scheme", ["he", "xavier", "lecun", "normal", "uniform"], index=0)
-    lr = st.sidebar.number_input("Learning rate", min_value=1e-6, value=0.01, format="%.6f")
-    epochs = st.sidebar.slider("Epochs", 1, 200, 50)
-    show_training = st.sidebar.checkbox("Show training progress", value=True)
+    st.markdown("#### Fourier filtering")
+    c1, c2 = st.columns([1, 3])
+    mode = c1.radio("Filter", ["low", "high"], format_func=lambda m: f"{m}-pass", horizontal=True)
+    radius = c1.slider("Cut-off radius (fraction of Nyquist)", 0.01, 1.0, 0.12, 0.01)
+    filtered, spectrum = fft_filter(img, radius, mode)
+    with c2:
+        a, b = st.columns(2)
+        a.plotly_chart(
+            charts.image(spectrum / (spectrum.max() + 1e-12), "Kept frequencies (log magnitude)"), width="stretch"
+        )
+        b.plotly_chart(charts.image(filtered, f"{mode.title()}-pass result"), width="stretch")
 
-    bg_choice = st.sidebar.selectbox("Background", ["Grey", "Workspace space.jpg", "None"], index=0)
-    if bg_choice == "Workspace space.jpg":
-        # Try the same candidate resolution performed at startup
-        for c in [ROOT / "space.jpg", ROOT / "assets" / "space.jpg", Path("/Users/alejandroines/mathematical-mind/space.jpg")]:
-            if c.exists():
-                set_background_image(str(c))
-                break
-    elif bg_choice == "None":
-        st.markdown("<style>body { background-color: #ffffff; }</style>", unsafe_allow_html=True)
+# ------------------------------------------------------------ math
+with tab_math:
+    st.markdown((ROOT / "app" / "static" / "math.md").read_text(encoding="utf-8"))
 
-    st.markdown("---")
-
-    # Parse layers
-    try:
-        layers = [int(x.strip()) for x in layers_input.split(",") if x.strip()]
-    except Exception:
-        st.sidebar.error("Invalid layer sizes")
-        layers = [4, 8, 4, 1]
-
-    tabs = st.tabs(["Train & Diagnose", "Experiments", "Brainiac Lab"])
-
-    with tabs[0]:
-        st.header("Train & Diagnose")
-        # Load data lazily
-        if data_source.startswith("CoinGecko"):
-            st.info("Fetching recent Bitcoin prices from CoinGecko...")
-            try:
-                import pandas as pd
-                import requests
-
-                resp = requests.get(
-                    "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
-                    params={"vs_currency": "usd", "days": "90"}, timeout=10,
-                )
-                prices = resp.json().get("prices", [])
-                if not prices:
-                    st.error("No price data returned")
-                    st.stop()
-                df = pd.DataFrame(prices, columns=["timestamp", "price"]).assign(
-                    timestamp=lambda d: pd.to_datetime(d["timestamp"], unit="ms")
-                )
-                # Use numpy.ptp on the underlying array to avoid pandas.Series.ptp missing
-                price_arr = df["price"].to_numpy()
-                denom = np.ptp(price_arr)
-                if denom == 0:
-                    df["price_norm"] = 0.0
-                else:
-                    df["price_norm"] = (price_arr - price_arr.min()) / denom
-                X = np.linspace(0, 1, len(df)).reshape(1, -1)
-                y = df["price_norm"].to_numpy().reshape(1, -1)
-                st.line_chart(df.set_index("timestamp")["price_norm"])
-                data_label = "Bitcoin Normalized Price"
-            except Exception as e:
-                st.error(f"Failed to fetch CoinGecko data: {e}")
-                st.stop()
-        else:
-            st.info("Using Iris dataset (local)")
-            try:
-                import pandas as pd
-                import seaborn as sns
-
-                iris = sns.load_dataset("iris")
-                df = iris.rename(columns={"species": "label"})
-                X = df.iloc[:, :-1].to_numpy().T
-                y_raw = df["label"].astype("category").cat.codes.to_numpy()
-                y = y_raw.reshape(1, -1) / y_raw.max()
-                st.dataframe(df.head())
-                data_label = "Iris Features (normalized)"
-            except Exception as e:
-                st.error(f"Failed to load Iris dataset: {e}")
-                st.stop()
-
-        st.write(f"### Training on: {data_label}")
-        layers = ensure_input_dim(layers, X)
-
-        if st.button("Start Training"):
-            # Lazy imports of project modules
-            from core.network import NeuralNetwork
-            from utils.plotting import plot_loss, plot_gradient_heatmap, plot_3d_loss_surface
-
-            model = NeuralNetwork(layer_sizes=layers, activation=activation, init_scheme=init_scheme)
-
-            progress = st.progress(0)
-
-            def cb(epoch, loss):
-                if show_training and epoch % max(1, epochs // 50) == 0:
-                    progress.progress(min(1.0, epoch / max(1, epochs)))
-
-            model.train(X, y, lr=lr, epochs=epochs, verbose=False, callback=cb)
-            progress.progress(1.0)
-            st.success(f"Training complete — final loss: {model.loss_history[-1]:.6f}")
-
-            st.subheader("Loss curve")
-            st.pyplot(plot_loss(model.loss_history))
-
-            st.subheader("Gradient norms (per epoch)")
-            st.pyplot(plot_gradient_heatmap(model.grad_norms_per_epoch))
-
-            st.subheader("Actual vs Predicted")
-            preds = model.predict(X)
-            fig2, ax = plt.subplots(figsize=(8, 4))
-            if data_source.startswith("CoinGecko"):
-                ax.plot(df["timestamp"], y.flatten(), label="Actual", color="#00ff88")
-                ax.plot(df["timestamp"], preds.flatten(), label="Predicted", color="#8b00ff")
-            else:
-                ax.scatter(range(len(y.flatten())), y.flatten(), label="Actual", color="#00ff88")
-                ax.scatter(range(len(preds.flatten())), preds.flatten(), label="Predicted", color="#8b00ff", alpha=0.6)
-            ax.legend(); ax.grid(alpha=0.3)
-            st.pyplot(fig2)
-
-            # 3D loss surface (if available)
-            try:
-                dense_layer = next((L for L in model.layers if hasattr(L, "W")), None)
-                if dense_layer is not None:
-                    st.subheader("3D loss surface (first Dense layer)")
-                    st.pyplot(plot_3d_loss_surface(dense_layer, X, y, weight_idx_pair=(0, 1), grid_scale=0.5))
-            except Exception:
-                pass
-
-    with tabs[1]:
-        st.header("Experiments")
-        st.write("Run convergence-speed comparisons across activations and init schemes")
-        experiment_activations = [activation]
-        experiment_inits = [init_scheme]
-        if st.button("Run Experiments"):
-            from core.network import run_convergence_experiments
-            from utils.plotting import plot_convergence_comparison
-
-            configs = [(a, i) for a in experiment_activations for i in experiment_inits]
-            layers_exp = ensure_input_dim(layers.copy(), X)
-            results = run_convergence_experiments(X, y, configs, layer_sizes=layers_exp, lr=lr, epochs=epochs)
-            st.pyplot(plot_convergence_comparison(results))
-            # summary
-            import pandas as pd
-
-            summary = {name: res["loss_history"][-1] if res["loss_history"] else None for name, res in results.items()}
-            st.write(pd.DataFrame.from_dict(summary, orient="index", columns=["Final Loss"]))
-
-    with tabs[2]:
-        st.header("Brainiac Lab")
-        st.write("Generate abstract art using linear algebra and signal transforms")
-        if st.button("Generate Art"):
-            fig = brainiac_lab_art()
-            st.pyplot(fig)
-
-    st.caption("Brainiac © 2025 — Live data optional. Built with NumPy, Streamlit, and pure math.")
-
-
-if __name__ == "__main__":
-    main()
+st.caption(
+    f"Brainiac © {time.strftime('%Y')} Alejandro Ines · NumPy, SciPy, Plotly & Streamlit · "
+    "[source on GitHub](https://github.com/manofmanana/brainiac-mathematical-data-analysis)"
+)

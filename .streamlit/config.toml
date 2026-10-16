@@ -1,8 +1,13 @@
 [theme]
-# Brainiac custom theme
-base="light"                       # disable dark mode behavior
-primaryColor="#00ff88"             # neon green accent
-backgroundColor="#101215"          # deep neutral background
-secondaryBackgroundColor="#181c20" # slightly lighter for panels
-textColor="#cfe8e0"                # soft green-gray text
-font="sans serif"
+base = "dark"
+primaryColor = "#00ff88"
+backgroundColor = "#0b0d10"
+secondaryBackgroundColor = "#151a1f"
+textColor = "#d8f5ea"
+font = "sans serif"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
