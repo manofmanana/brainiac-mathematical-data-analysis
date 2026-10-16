@@ -1,0 +1,21 @@
+[project]
+name = "brainiac"
+version = "2.0.0"
+description = "A neural network built from first principles in NumPy, with an interactive Streamlit lab."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Alejandro Ines" }]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -p no:cacheprovider"
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "NPY"]
+ignore = ["E501", "E731", "E741"]

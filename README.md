@@ -1,116 +1,127 @@
-# Brainiac — Mathematical Neural Network
+# 🧠 Brainiac: a neural network from first principles
 
-Brainiac is an educational, math-first implementation of a feed-forward neural network. It was designed as a portfolio piece to demonstrate both theoretical understanding (multivariate calculus, linear algebra, probability/statistics) and practical engineering (numerical stability, testing, reproducible experiments). The project pairs a compact NumPy implementation of network components with an interactive Streamlit dashboard for visualization and experimentation.
+[![CI](https://github.com/manofmanana/brainiac-mathematical-data-analysis/actions/workflows/ci.yml/badge.svg)](https://github.com/manofmanana/brainiac-mathematical-data-analysis/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
+![NumPy only](https://img.shields.io/badge/deep%20learning%20framework-none-00ff88)
 
-This README explains the project's goals, the math it showcases, how the code is organized, how to run and reproduce experiments, and suggestions for how to present this work in an MS application.
+**[Live app →](https://brainiac-mathematical.streamlit.app/)**
 
-Live deployment can be found here: https://brainiac-mathematical.streamlit.app/
+Brainiac is a feed-forward neural network written from scratch in NumPy. It has no PyTorch, TensorFlow or autograd: every derivative is derived by hand, implemented explicitly, and **verified numerically**. An interactive Streamlit lab lets you train it, check its gradients, look at its loss landscape and Hessian, run controlled experiments, and explore the linear algebra behind it all.
 
-## High-level goals
+It's a portfolio piece about the mathematics of deep learning: multivariable calculus (backpropagation), linear algebra (SVD, PCA, eigenvalues), and statistics (standardisation, train/test splits, results over multiple seeds).
 
-- Provide a minimal, readable implementation of a neural network from first principles (no deep learning frameworks) so reviewers can inspect the math and code directly.
-- Make the mathematics explicit: show activation functions, their derivatives, backpropagation logic, and the effects of initialization and learning rate on training dynamics.
-- Supply visual diagnostics (loss curves, gradient norms, 3D loss slices) that make model behavior interpretable and teachable.
-- Include small reproducible experiments and tests to demonstrate scientific thinking and engineering rigor.
+![Train & diagnose](docs/train.webp)
 
-## Mathematical foundations 
+## What you can do in the app
 
-1) Multivariable calculus and backpropagation
+| Tab | What it shows | The maths |
+|---|---|---|
+| 🧠 **Train & diagnose** | Decision regions or regression fit, loss and accuracy curves, per-layer gradient norms, weight distributions, test-set accuracy | Chain rule, softmax cross-entropy, SGD / momentum / Adam |
+| ✅ **Gradient check** | Backprop vs finite differences for every parameter (relative error ~1e-9) | Central differences, $O(\varepsilon^2)$ truncation error |
+| ⛰️ **Loss landscape** | 3-D loss surface around the solution, the path from initialisation, Hessian $\lambda_{\max}$ and trace, the stable step-size bound | Hessian-vector products, power iteration, Hutchinson's estimator, $\eta < 2/\lambda_{\max}$ |
+| ⚖️ **Experiments** | Activation × initialisation grid over several seeds: mean ± spread curves and a results table | Variance-preserving initialisation, vanishing gradients |
+| 🧪 **Linear algebra lab** | SVD image compression with a rank slider, PCA of the dataset, Fourier low/high-pass filtering | Eckart–Young, covariance eigen-decomposition, 2-D FFT |
+| 📐 **The math** | Full derivations of everything above | |
 
-- The network uses mean-squared error (MSE) as the loss: $L(\theta)=\frac{1}{N}\sum_{i}(y_i - \hat y_i)^2$.
-- Gradients are computed analytically using the chain rule. For a Dense layer with parameters $W,b$ and input $x$, the forward output is $z=W x + b$ and the backward pass computes
-	- $\frac{\partial L}{\partial W} = (\partial L/\partial z) x^T$ (implemented and demonstrated)
-	- $\frac{\partial L}{\partial b} = \sum_i \partial L/\partial z_i$
-- The project includes visualization of gradient norms per-epoch, which helps reveal vanishing/exploding gradients and how activations/initialization mitigate those problems.
+Datasets (all generated locally and seeded, so there are no network calls): two moons, concentric circles, 3-class spirals, Iris, and a noisy sine wave for regression.
 
-2) Linear algebra
+<p align="center">
+  <img src="docs/gradient-check.webp" width="49%" alt="Gradient check">
+  <img src="docs/landscape.webp" width="49%" alt="Loss landscape">
+</p>
+<p align="center">
+  <img src="docs/experiments.webp" width="49%" alt="Experiments">
+  <img src="docs/linalg-lab.webp" width="49%" alt="Linear algebra lab">
+</p>
 
-- Dense layers are matrix multiplications; the code makes the shapes explicit and enforces input-dimension compatibility.
-- Brainiac Lab: SVD-based image reconstructions and PCA-like components illustrate how singular vectors capture structure. FFT visualizations demonstrate frequency structure of random fields.
+## The core maths, briefly
 
-3) Probability & statistics
+For a batch $X \in \mathbb{R}^{d\times N}$ (one sample per column), each layer computes $Z = WA + b\mathbf{1}^\top$, $A' = f(Z)$. With $G = \partial L/\partial Z$, backpropagation is
 
-- Feature/target normalization is used for stable training and to illustrate the effect of scale on optimization.
-- Experimental controls include injecting Gaussian noise and comparing how noise affects final MSE and convergence.
+$$
+\frac{\partial L}{\partial W} = G A^\top,\qquad \frac{\partial L}{\partial b} = G\mathbf{1},\qquad \frac{\partial L}{\partial A} = W^\top G .
+$$
 
-4) Numerical considerations and initialization
+For classification the network outputs logits and uses softmax cross-entropy, whose gradient is simply $(P - Y)/N$; it's computed with the log-sum-exp trick so it never overflows. The **📐 The math** tab and [`app/static/math.md`](app/static/math.md) have the full derivations, including activation derivatives, initialisation variance, Adam's bias correction, and why gradient descent needs $\eta < 2/\lambda_{\max}$.
 
-- The code implements common initialization schemes (He, Xavier/Glorot, LeCun, Normal, Uniform) and shows how they interact with activations (ReLU, Sigmoid, Tanh, GELU).
-- There are small experiments (see `experiments/run_convergence.py`) to compare convergence speed and final loss across init/activation combinations.
+## Verification
 
-## What I implemented (quick code tour)
+The [test suite](tests/) (61 tests) checks the mathematics, not just that the code runs:
 
-- `app/main.py`: Streamlit interface. Lightweight, lazy imports for heavy modules, interactive controls, Brainiac Lab visualization, and CSS-based theme.
-- `core/layers.py`: Dense and Activation classes with explicit forward/backward methods. Activation derivatives implemented for ReLU, Sigmoid, Tanh, and GELU (GELU uses `scipy.special.erf`).
-- `core/network.py`: NeuralNetwork wrapper, training loop, and helper for running convergence experiments.
-- `utils/plotting.py`: (existing) plotting helpers that return matplotlib Figures for embedding in the Streamlit app.
-- `experiments/run_convergence.py`: small script to run activation/init comparisons and print final losses.
-- `utils/hessian_utils.py`: a Hutchinson estimator to approximate trace(H) for simple curvature diagnostics.
-- `tests/`: unit tests and numerical gradient checks (activation derivatives, Dense backward, and a tiny training sanity test) demonstrating verification practices.
-
-## How to run locally (recommended reproducible steps)
-
-1. Create and activate a virtual environment (recommended):
+- every activation derivative against finite differences (to 1e-6 relative)
+- **full-network gradient checks** for every activation × {classification, regression} (relative error < 1e-6)
+- initialiser variances match their formulas; softmax cross-entropy is stable for ±1000 logits
+- SGD, momentum and Adam all minimise an ill-conditioned quadratic; Adam's first step equals the learning rate (bias correction)
+- Hessian-vector products, Hutchinson's trace and power iteration are exact on a quadratic with a known Hessian
+- SVD error matches Eckart–Young; PCA eigenvalues match `numpy.cov`; standardisation uses training statistics only
+- training reaches > 90% test accuracy on every classification dataset and is bit-for-bit reproducible per seed
+- the Streamlit app itself renders every tab and dataset without errors (Streamlit `AppTest`)
 
 ```bash
-python -m venv venv
-source venv/bin/activate
+python -m pytest
 ```
 
-2. Install dependencies:
+## Run it locally
 
 ```bash
-pip install -r requirements.txt
-```
-
-3. (Optional) run tests to confirm the environment:
-
-```bash
-python -m pytest -q
-```
-
-4. Run the Streamlit app:
-
-```bash
+git clone https://github.com/manofmanana/brainiac-mathematical-data-analysis.git
+cd brainiac-mathematical-data-analysis
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements-dev.txt
 streamlit run main.py
 ```
 
-5. Use the sidebar to pick data, set layer sizes, activation, initialization, learning rate, and epochs. The app exposes training diagnostics and Brainiac Lab visualizations.
+The library works on its own too:
 
-## Reproducing experiments
+```python
+from brainiac import NeuralNetwork, load_dataset
+from brainiac.gradcheck import gradient_check
 
-- Example experiment script: `python experiments/run_convergence.py` — runs a small synthetic experiment comparing activations (`relu`, `gelu`) and initializations (`he`, `xavier`) and prints final losses.
-- For reproducibility, most functions accept an RNG seed parameter or use fixed seeds in example experiments and tests.
+data = load_dataset("Two moons")
+net = NeuralNetwork([2, 16, 16, 2], activation="tanh", init="xavier", task="classification", seed=0)
+print(gradient_check(net, data.X_train, data.Y_train).overall)   # ~1e-10
+hist = net.fit(data.X_train, data.Y_train, epochs=200, lr=0.01, optimizer="adam", batch_size=32)
+print(net.accuracy(data.X_test, data.Y_test))                    # ~0.98
+```
 
-## Notebooks & exported figures
+A walkthrough notebook with real outputs lives at [`notebooks/brainiac_walkthrough.ipynb`](notebooks/brainiac_walkthrough.ipynb). It's generated by `notebooks/build_notebook.py`, which CI runs on every push so the notebook can't go stale.
 
-- A lightweight Jupyter notebook with a step-by-step derivation and example experiments is included under `notebooks/` for presentation and teaching. Because interactive notebooks can be fragile across environments, there is also a script that reproduces the notebook figures without requiring notebook execution:
+## Project structure
 
-	- `notebooks/generate_figures.py` — runs a small demo and experiment, then saves PNG figures to `notebooks/figures/`.
-	- Generated images (for inclusion in reports/README) live in `notebooks/figures/` and include loss curves, gradient heatmaps, and convergence comparison plots.
+```
+brainiac/              the library (pure NumPy + SciPy's erf)
+  activations.py       ReLU, leaky ReLU, sigmoid, tanh, GELU + exact derivatives
+  initializers.py      He, Xavier/Glorot, LeCun, normal, uniform
+  layers.py            Dense and Activation layers (explicit forward/backward)
+  losses.py            MSE, stable softmax cross-entropy
+  optimizers.py        SGD, momentum, Adam
+  network.py           NeuralNetwork: mini-batch training, flat-parameter views, diagnostics
+  gradcheck.py         finite-difference verification
+  curvature.py         Hessian-vector products, Hutchinson trace, power iteration
+  landscape.py         filter-normalised loss surfaces, interpolation paths
+  experiments.py       multi-seed activation x initialisation comparisons
+  linalg_lab.py        SVD compression, PCA, FFT filtering
+  datasets.py          seeded datasets with leakage-free standardisation
+main.py                Streamlit app
+app/                   charts (Plotly), CSS, and the math page
+notebooks/             walkthrough notebook + its build script
+tests/                 pytest suite
+```
 
-Use the script when you want reproducible images without running the full interactive notebook workflow.
+## What changed in v2
 
-## Testing & verification
+Version 2 is a ground-up rewrite. Fixes to the original version:
 
-- A small pytest suite exists under `tests/`:
-	- Activation derivatives are numerically checked (finite differences) against analytic derivatives.
-	- Dense backward pass is compared to numerical gradients computed over flattened parameter vectors.
-	- A simple training sanity test verifies loss decreases on a small linear problem.
-- Run the tests with `python -m pytest -q`.
+- **GELU derivative:** it was $\Phi(x) + \tfrac12 x\varphi(x)$; the correct form is $\Phi(x) + x\varphi(x)$. The old test that should have caught it only checked the last activation in its loop, with a 0.15 tolerance.
+- **Learning rate:** gradients were divided by $N$ twice (in the loss and again in each layer), so the effective learning rate was $\eta/N$.
+- **Xavier initialisation:** it was identical to LeCun ($\sqrt{1/n_{\text{in}}}$) instead of $\sqrt{2/(n_{\text{in}}+n_{\text{out}})}$.
+- **"3-D loss surface":** it treated the first layer as the whole network. It's now a true slice of the full network's loss.
+- **Gradient checker:** it read weights *after* the update and called them the gradient.
+- **Iris:** it was fitted as regression on label codes with unscaled features. It's now a proper 3-class classification with a held-out test set.
+- **Experiments tab:** it compared a single configuration. It now runs a full grid over several seeds.
+- **Dependencies:** removed hard-coded local paths, a background hack that broke Streamlit's popups, and runtime network calls (CoinGecko, seaborn downloads), and cut 60+ pinned packages down to six.
 
+## Author
 
-## File layout
-
-- `app/` — Streamlit application and static CSS/assets.
-- `core/` — model building blocks: `layers.py`, `network.py`.
-- `utils/` — plotting helpers and numerical diagnostics (hessian estimator).
-- `experiments/` — reproducible experiment scripts.
-- `tests/` — pytest test suite with numerical checks.
-
-## License & contact
-
-This repository is a personal portfolio project. If you use or adapt the code, please include a note in your application or CV. If you'd like help tailoring a one-page summary or a short video demo for your application, contact: your-email@example.com
-
----
-
+Alejandro Ines. If you use or adapt this work, please credit the author.
